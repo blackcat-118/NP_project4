@@ -58,7 +58,8 @@ public:
         env_vars.push_back(pair<string, string>("SERVER_PORT", ""));
         env_vars.push_back(pair<string, string>("REMOTE_ADDR", ""));
         env_vars.push_back(pair<string, string>("REMOTE_PORT", ""));
-        memset(read_data_, '\0', max_length);
+        memset(read_from_client, '\0', max_length);
+        memset(read_from_server, '\0', max_length);
         read_request();
     }
 
@@ -73,9 +74,11 @@ private:
     boost::asio::ip::tcp::resolver::results_type endpoint_;
     boost::asio::ip::tcp::socket server_socket_;
     boost::asio::ip::tcp::socket client_socket_;
-    enum { max_length = 1024 };
-    char read_data_[max_length];
-    char write_data_[max_length];
+    enum { max_length = 10240 };
+    char read_from_client[max_length];
+    char read_from_server[max_length];
+    // char write_to_client[max_length];
+    // char write_to_server[max_length];
     vector<pair<string, string>> env_vars;
 
     void do_resolve(boost::asio::ip::tcp::resolver::query query_) {
@@ -93,7 +96,7 @@ private:
     }
     void read_request() {
         auto self(shared_from_this());
-        client_socket_.async_read_some(boost::asio::buffer(read_data_, max_length),
+        client_socket_.async_read_some(boost::asio::buffer(read_from_client, max_length),
                                 [this, self](boost::system::error_code ec, std::size_t length) {
             if (!ec) {
                 // Parser(string(data_));
@@ -101,46 +104,30 @@ private:
                 // env_vars[6].second = to_string(socket_.local_endpoint().port());
                 // env_vars[7].second = socket_.remote_endpoint().address().to_string();
                 // env_vars[8].second = to_string(socket_.remote_endpoint().port());
-                request_parser(read_data_);
-                cout << "<S_IP>: " << endl;
-                cout << "<S_PORT>: " << endl;
+                request_parser(read_from_client);
+                cout << "<S_IP>: " << client_socket_.remote_endpoint().address().to_string() << endl;
+                cout << "<S_PORT>: " << to_string(client_socket_.remote_endpoint().port()) << endl;
                 cout << "<D_IP>: " << dst_ip << endl;
                 cout << "<D_PORT>: " << dst_port << endl;
-                cout << flush;
                 cout << vn << " " << cd << " " << dst_port << " " << dst_ip << " id: " << userid << " dom: " << domain_name << endl;
                 if (vn == 5) {
                     cout << "<Reply>: Reject" << endl;
                     client_socket_.close();
+                    server_socket_.close();
                     return;
                 }
                 // connect
                 if (cd == 1) {
                     cout << "<Command>: CONNECT" << endl;
                     cout << "<Reply>: Accept" << endl;
-                    string reply = reply_generator();
-                    strncpy(write_data_, reply.data(), 8);
-                    auto self1(shared_from_this());
-                    boost::asio::async_write(client_socket_, boost::asio::buffer(write_data_, 8),
-                                            [this, self1](boost::system::error_code ec, std::size_t /*length*/) {
-                        if (!ec) {
-                            if (domain_name == "") {
-                                connect_v4();
-                            }
-                            else {
-                                boost::asio::ip::tcp::resolver::query query_(domain_name, to_string(dst_port));
-                                do_resolve(query_);
-                                
-                            }
-                        }
-                        else {
-                            cout << "error" << endl;
-                        }
-                    });
                     
-                    // client_read();
-                    
-                    // client_write(reply.size());
-                    
+                    if (domain_name == "") {
+                        connect_v4();
+                    }
+                    else {
+                        boost::asio::ip::tcp::resolver::query query_(domain_name, to_string(dst_port));
+                        do_resolve(query_);
+                    }
                 }
                 //   int childpid = fork();
                 //   if (childpid == 0) {
@@ -174,63 +161,94 @@ private:
         });
     }
     void client_read() {
-        cout << "client read " << endl;
+        memset(read_from_client, '\0', max_length);
         auto self(shared_from_this());
-        client_socket_.async_read_some(boost::asio::buffer(read_data_, max_length),
+        client_socket_.async_read_some(boost::asio::buffer(read_from_client, max_length),
                                 [this, self](boost::system::error_code ec, std::size_t length) {
             if (!ec) {
-                // cout << read_data_ << endl;
-                strcpy(write_data_, read_data_);
-                server_write(strlen(write_data_));
+                // cout << read_from_client << endl;
+                // cout << "length: " << length << endl;
+                // strncpy(write_to_server, read_from_client, length);
+                server_write(length);
+            }
+            else {
+                // server_read();
             }
         });
     }
 
     void server_read() {
+        memset(read_from_server, '\0', max_length);
         auto self(shared_from_this());
-        server_socket_.async_read_some(boost::asio::buffer(read_data_, max_length),
+        server_socket_.async_read_some(boost::asio::buffer(read_from_server, max_length),
                                 [this, self](boost::system::error_code ec, std::size_t length) {
             if (!ec) {
-                // cout << read_data_ << endl;
-                strcpy(write_data_, read_data_);
-                client_write(strlen(write_data_));
+                // cout << read_from_server << endl;
+                // strncpy(write_to_client, read_from_server, length);
+                client_write(length);
+            }
+            else {
+                if(client_socket_.is_open())
+                    client_socket_.close(); 
+                if(server_socket_.is_open())
+                    server_socket_.close();
+                // client_read();
             }
         });
     }
 
     void client_write(std::size_t length) {
         auto self(shared_from_this());
-        boost::asio::async_write(client_socket_, boost::asio::buffer(write_data_, length),
+        boost::asio::async_write(client_socket_, boost::asio::buffer(read_from_server, length),
                                  [this, self](boost::system::error_code ec, std::size_t /*length*/) {
             if (!ec) {
-                client_read();
-            }
-        });
-    }
-    void server_write(std::size_t length) {
-        auto self(shared_from_this());
-        boost::asio::async_write(server_socket_, boost::asio::buffer(write_data_, length),
-                                 [this, self](boost::system::error_code ec, std::size_t /*length*/) {
-            if (!ec) {
+                // memset(write_to_client, '\0', max_length);
                 server_read();
             }
         });
     }
+
+    void server_write(std::size_t length) {
+        auto self(shared_from_this());
+        boost::asio::async_write(server_socket_, boost::asio::buffer(read_from_client, length),
+                                 [this, self](boost::system::error_code ec, std::size_t /*length*/) {
+            if (!ec) {
+                // memset(write_to_server, '\0', max_length);
+                client_read();
+            }
+        });
+    }
     void connect_v4() {
-        cout << "connecting..." << endl;
+        // cout << "connecting..." << endl;
         boost::asio::ip::tcp::endpoint endpoint(boost::asio::ip::address::from_string(dst_ip), dst_port);
-        cout << endpoint.address() << endl;
+        // cout << endpoint.address() << endl;
         auto self(shared_from_this());
         server_socket_.async_connect(endpoint,
                               [this, self](boost::system::error_code ec) {
             if (!ec) {
-                cout << "connected" << endl;
+                // cout << "connected" << endl;
+                char* reply = reply_generator();
+                auto self1(shared_from_this());
+                boost::asio::async_write(client_socket_, boost::asio::buffer(reply, 8),
+                                        [this, self1, reply](boost::system::error_code ec, std::size_t /*length*/) {
+                    if (!ec) {
+                        free(reply);
+                        client_read();
+                        server_read();
+                    }
+                    else {
+                        if(client_socket_.is_open())
+                            client_socket_.close(); 
+                        if(server_socket_.is_open())
+                            server_socket_.close();
+                    }
+                });
+                
                 // if (file != ""){
                 //     file = "./test_case/" + file;
                 //     fin = ifstream(file.data());
                 // }
                 // memset(data_, '\0', 20480);
-                server_read();
             }
             else {
                 // fin.close();
@@ -240,12 +258,12 @@ private:
     }
 
     void connect_v4a() {
-        cout << "connecting..." << endl;
+        // cout << "connecting..." << endl;
         auto self(shared_from_this());
         server_socket_.async_connect(*(endpoint_.begin()),
                               [this, self](boost::system::error_code ec) {
             if (!ec) {
-                cout << "connected" << endl;
+                // cout << "connected" << endl;
                 // if (file != ""){
                 //     file = "./test_case/" + file;
                 //     fin = ifstream(file.data());
@@ -271,17 +289,26 @@ private:
             userid = userid + req[i];
             i++;
         }
-        // i++;
-        // while (req[i] != '\0') {
-        //     domain_name = domain_name + req[i];
-        //     i++;
-        // }
+        i++;
+        while (req[i] != '\0') {
+            domain_name = domain_name + req[i];
+            i++;
+        }
         return;
     }
 
-    string reply_generator() {
-        cout << string('\0'+90+"\0\0\0\0\0\0") << endl;
-        return string('\0'+90+"\0\0\0\0\0\0");
+    char* reply_generator() {
+        char* r = (char*)malloc(8);
+        for (int i = 0; i < 8; i++) {
+            if (i == 1) {
+                r[i] = 90;
+            }
+            else {
+                r[i] = 0;
+            }
+        }
+
+        return r;
     }
 };
 
@@ -312,6 +339,7 @@ private:
 
                 else {
                     io_context.notify_fork(boost::asio::io_context::fork_parent);
+                    socket.close();
                     int wstatus;
                     for (int i = 0; i < (int)pid_pool.size(); i++) {
                         if (waitpid(pid_pool[i], &wstatus, WNOHANG) > 0) {

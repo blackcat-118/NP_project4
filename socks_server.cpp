@@ -85,9 +85,9 @@ private:
     vector<pair<string, string>> env_vars;
 
     void do_resolve(boost::asio::ip::tcp::resolver::query query_) {
-        
+        auto self(shared_from_this());
         resolver_.async_resolve(query_, 
-        [this](boost::system::error_code ec, boost::asio::ip::tcp::resolver::results_type result) {
+        [this, self](boost::system::error_code ec, boost::asio::ip::tcp::resolver::results_type result) {
             endpoint_ = result;
             if (!ec) {
                 // connect_v4a();                
@@ -99,7 +99,7 @@ private:
     }
 
     void do_reject() {
-        char* reply = reply_generator(false, 0);
+        unsigned char* reply = reply_generator(false, 0);
         auto self(shared_from_this());
         boost::asio::async_write(client_socket_, boost::asio::buffer(reply, 8),
             [this, self, reply](boost::system::error_code ec, std::size_t /*length*/) {
@@ -123,7 +123,7 @@ private:
                 cout << "<S_PORT>: " << to_string(client_socket_.remote_endpoint().port()) << endl;
                 cout << "<D_IP>: " << dst_ip << endl;
                 cout << "<D_PORT>: " << dst_port << endl;
-                cout << vn << " " << cd << " " << dst_port << " " << dst_ip << " id: " << userid << " dom: " << domain_name << endl;
+                // cout << vn << " " << cd << " " << dst_port << " " << dst_ip << " id: " << userid << " dom: " << domain_name << endl;
                 if (cd == 1) {
                     cout << "<Command>: CONNECT" << endl;
                 }
@@ -132,6 +132,7 @@ private:
                 }
                 if (vn == 5) {
                     cout << "<Reply>: Reject" << endl;
+                    cout << "-----------------------" << endl;
                     do_reject();
                     return;
                 }
@@ -139,6 +140,7 @@ private:
                 // do firewall 
                 if (firewall()) {
                     cout << "<Reply>: Accept" << endl;
+                    cout << "-----------------------" << endl;
                     if (cd == 1) {
                         if (domain_name == "") {
                             connect_v4();
@@ -266,12 +268,13 @@ private:
         return false;
     }
     void do_accept() {
+        auto self(shared_from_this());
         acceptor_.async_accept(
-            [this](boost::system::error_code ec, boost::asio::ip::tcp::socket socket) {
+            [this, self](boost::system::error_code ec, boost::asio::ip::tcp::socket socket) {
             if (!ec) {
                 server_socket_ = std::move(socket);
-                int listen_port = server_socket_.local_endpoint().port();
-                char* reply = reply_generator(true, listen_port);
+                int listen_port = acceptor_.local_endpoint().port();
+                unsigned char* reply = reply_generator(true, listen_port);
                 auto self(shared_from_this());
                 boost::asio::async_write(client_socket_, boost::asio::buffer(reply, 8),
                     [this, self, reply](boost::system::error_code ec, std::size_t /*length*/) {
@@ -289,8 +292,7 @@ private:
                 });
                 do_accept();
             }
-        });
-        
+        });        
     }
 
     void connect_v4() {
@@ -302,12 +304,12 @@ private:
                               [this, self](boost::system::error_code ec) {
             if (!ec) {
                 // cout << "connected" << endl;
-                char* reply;
+                unsigned char* reply;
                 reply = reply_generator(true, 0);
 
-                auto self(shared_from_this());
+                auto self1(shared_from_this());
                 boost::asio::async_write(client_socket_, boost::asio::buffer(reply, 8),
-                                        [this, self, reply](boost::system::error_code ec, std::size_t /*length*/) {
+                                        [this, self1, reply](boost::system::error_code ec, std::size_t /*length*/) {
                     if (!ec) {
                         free(reply);
                         client_read();
@@ -338,12 +340,12 @@ private:
                               [this, self](boost::system::error_code ec) {
             if (!ec) {
                 // cout << "connected" << endl;
-                char* reply;
+                unsigned char* reply;
                 reply = reply_generator(true, 0);
 
-                auto self(shared_from_this());
+                auto self1(shared_from_this());
                 boost::asio::async_write(client_socket_, boost::asio::buffer(reply, 8),
-                                        [this, self, reply](boost::system::error_code ec, std::size_t /*length*/) {
+                                        [this, self1, reply](boost::system::error_code ec, std::size_t /*length*/) {
                     if (!ec) {
                         free(reply);
                         client_read();
@@ -367,15 +369,14 @@ private:
     void bind() {
                 
         // bind a port
-        unsigned int listen_port = port_base + port_counter;
-        port_counter ++;
-
-        boost::asio::ip::tcp::endpoint ep(boost::asio::ip::tcp::v4(), listen_port);
+        boost::asio::ip::tcp::endpoint ep(boost::asio::ip::tcp::v4(), 0);
         acceptor_.open(ep.protocol());
         acceptor_.set_option(boost::asio::ip::tcp::acceptor::reuse_address(true));
         acceptor_.bind(ep);
-        acceptor_.listen();
-        char* reply = reply_generator(true, listen_port);
+        acceptor_.listen(boost::asio::socket_base::max_connections);
+        unsigned int listen_port = acceptor_.local_endpoint().port();
+
+        unsigned char* reply = reply_generator(true, listen_port);
 
         auto self(shared_from_this());
         boost::asio::async_write(client_socket_, boost::asio::buffer(reply, 8),
@@ -411,8 +412,8 @@ private:
         return;
     }
 
-    char* reply_generator(bool accept, int dport) {
-        char* r = (char*)malloc(8);
+    unsigned char* reply_generator(bool accept, unsigned int dport) {
+        unsigned char* r = (unsigned char*)malloc(8);
         r[0] = 0;
         if (accept) {
             r[1] = 90;
@@ -422,13 +423,11 @@ private:
         }
         r[2] = dport/256;
         r[3] = dport%256;
-        cout << (unsigned int)r[2] << " " << (unsigned int)r[3] << endl;
-        cout << dport << endl;
         // ip address is 0
         for (int i = 4; i < 8; i++) {
             r[i] = 0;
         }
-
+ 
         return r;
     }
 };

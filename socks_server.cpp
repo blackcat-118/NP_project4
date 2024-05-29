@@ -20,30 +20,6 @@ boost::asio::io_context io_context;
 unsigned int port_counter = 0;
 unsigned int port_base = 21235;
 
-void Parser(string http_req) {
-    vector<string> parsed_req;
-
-    boost::split(parsed_req, http_req, boost::is_any_of(" \r\n"), boost::token_compress_on);
-
-    // env_vars[0].second = parsed_req[0];
-    // env_vars[1].second = parsed_req[1];
-    size_t indx = parsed_req[1].find_first_of('?');
-    string query = "";
-    if (indx != string::npos) {
-        service_name = parsed_req[1].substr(1, indx-1);
-        query = parsed_req[1].substr(indx+1);
-    }
-    else {
-        service_name = parsed_req[1].substr(1);
-        //cout << service_name << endl;
-    }
-    // env_vars[2].second = query;
-    // env_vars[3].second = parsed_req[2];
-    // env_vars[4].second = parsed_req[4];
-
-    return;
-}
-
 class session
     : public std::enable_shared_from_this<session>
 {
@@ -52,16 +28,6 @@ public:
         client_socket_(std::move(socket)), acceptor_(io_context) {}
 
     void start() {
-        // set env
-        env_vars.push_back(pair<string, string>("REQUEST_METHOD", ""));
-        env_vars.push_back(pair<string, string>("REQUEST_URI", ""));
-        env_vars.push_back(pair<string, string>("QUERY_STRING", ""));
-        env_vars.push_back(pair<string, string>("SERVER_PROTOCOL", ""));
-        env_vars.push_back(pair<string, string>("HTTP_HOST", ""));
-        env_vars.push_back(pair<string, string>("SERVER_ADDR", ""));
-        env_vars.push_back(pair<string, string>("SERVER_PORT", ""));
-        env_vars.push_back(pair<string, string>("REMOTE_ADDR", ""));
-        env_vars.push_back(pair<string, string>("REMOTE_PORT", ""));
         memset(read_from_client, '\0', max_length);
         memset(read_from_server, '\0', max_length);
         read_request();
@@ -71,6 +37,7 @@ private:
     unsigned int vn;
     unsigned int cd;
     unsigned int dst_port;
+    bool accept = false;
     string dst_ip = "";
     string userid = "";
     string domain_name = "";
@@ -82,17 +49,17 @@ private:
     enum { max_length = 10240 };
     char read_from_client[max_length];
     char read_from_server[max_length];
-    vector<pair<string, string>> env_vars;
 
-    void do_resolve(boost::asio::ip::tcp::resolver::query query_) {
+    void do_resolve() {
         auto self(shared_from_this());
+        boost::asio::ip::tcp::resolver::query query_(domain_name, to_string(dst_port));
         resolver_.async_resolve(query_, 
-        [this, self](boost::system::error_code ec, boost::asio::ip::tcp::resolver::results_type result) {
-            endpoint_ = result;
-            if (!ec) {
-                // connect_v4a();                
-            }
-            else {
+        [this, self](const boost::system::error_code &ec,
+            const boost::asio::ip::tcp::resolver::results_type results){
+            if(!ec){
+                endpoint_ = results;
+                connect_v4a();
+            }else{
                 client_socket_.close();
             }
         });
@@ -107,57 +74,67 @@ private:
         });
         client_socket_.close();
     }
+    void print_info() {
+        cout << "<S_IP>: " << client_socket_.remote_endpoint().address().to_string() << endl;
+        cout << "<S_PORT>: " << to_string(client_socket_.remote_endpoint().port()) << endl;
+        cout << "<D_IP>: " << server_socket_.remote_endpoint().address().to_string() << endl;
+        cout << "<D_PORT>: " << dst_port << endl;
+        if (cd == 1) {
+            cout << "<Command>: CONNECT" << endl;
+        }
+        else {
+            cout << "<Command>: BIND" << endl;
+        }
+        if (vn == 5) {
+            cout << "<Reply>: Reject" << endl;
+            cout << "-----------------------" << endl;
+            return;
+        }
+        if (accept) {
+            cout << "<Reply>: Accept" << endl;
+            cout << "-----------------------" << endl;
+        }
+        else {
+            cout << "<Reply>: Reject" << endl;
+            cout << "-----------------------" << endl;
+            return;
+        }
+    }
+    void process_request() {
+        // cout << vn << " " << cd << " " << dst_port << " " << dst_ip << " id: " << userid << " dom: " << domain_name << endl;
+        if (vn == 5) {
+            do_reject();
+            print_info();
+            return;
+        }
+        // do firewall 
+        accept = firewall();
+        if (accept) {
+            if (cd == 1) {
+                if (domain_name == "") {
+                    connect_v4();
+                }
+                else {
+                    do_resolve();
+                }
+            }
+            else if (cd == 2) {
+                bind();
+            }
+        }
+        else {
+            do_reject();
+            return;
+        }
+    }
 
     void read_request() {
         auto self(shared_from_this());
         client_socket_.async_read_some(boost::asio::buffer(read_from_client, max_length),
                                 [this, self](boost::system::error_code ec, std::size_t length) {
             if (!ec) {
-                // Parser(string(data_));
-                // env_vars[5].second = socket_.local_endpoint().address().to_string();
-                // env_vars[6].second = to_string(socket_.local_endpoint().port());
-                // env_vars[7].second = socket_.remote_endpoint().address().to_string();
-                // env_vars[8].second = to_string(socket_.remote_endpoint().port());
                 request_parser(read_from_client);
-                cout << "<S_IP>: " << client_socket_.remote_endpoint().address().to_string() << endl;
-                cout << "<S_PORT>: " << to_string(client_socket_.remote_endpoint().port()) << endl;
-                cout << "<D_IP>: " << dst_ip << endl;
-                cout << "<D_PORT>: " << dst_port << endl;
-                // cout << vn << " " << cd << " " << dst_port << " " << dst_ip << " id: " << userid << " dom: " << domain_name << endl;
-                if (cd == 1) {
-                    cout << "<Command>: CONNECT" << endl;
-                }
-                else {
-                    cout << "<Command>: BIND" << endl;
-                }
-                if (vn == 5) {
-                    cout << "<Reply>: Reject" << endl;
-                    cout << "-----------------------" << endl;
-                    do_reject();
-                    return;
-                }
-
-                // do firewall 
-                if (firewall()) {
-                    cout << "<Reply>: Accept" << endl;
-                    cout << "-----------------------" << endl;
-                    if (cd == 1) {
-                        if (domain_name == "") {
-                            connect_v4();
-                        }
-                        else {
-                            connect_v4a();
-                        }
-                    }
-                    else if (cd == 2) {
-                        bind();
-                    }
-                }
-                else {
-                    cout << "<Reply>: Reject" << endl;
-                    do_reject();
-                    return;
-                }
+                process_request();
             }
         });
     }
@@ -167,12 +144,13 @@ private:
         client_socket_.async_read_some(boost::asio::buffer(read_from_client, max_length),
                                 [this, self](boost::system::error_code ec, std::size_t length) {
             if (!ec) {
-                // cout << read_from_client << endl;
-                // cout << "length: " << length << endl;
-                // strncpy(write_to_server, read_from_client, length);
                 server_write(length);
             }
             else {
+                if(client_socket_.is_open())
+                    client_socket_.close(); 
+                if(server_socket_.is_open())
+                    server_socket_.close();
                 // server_read();
             }
         });
@@ -189,10 +167,7 @@ private:
                 client_write(length);
             }
             else {
-                if(client_socket_.is_open())
-                    client_socket_.close(); 
-                if(server_socket_.is_open())
-                    server_socket_.close();
+                
                 // client_read();
             }
         });
@@ -206,6 +181,12 @@ private:
                 // memset(write_to_client, '\0', max_length);
                 server_read();
             }
+            else {
+                if(client_socket_.is_open())
+                    client_socket_.close(); 
+                if(server_socket_.is_open())
+                    server_socket_.close();
+            }
         });
     }
 
@@ -216,6 +197,12 @@ private:
             if (!ec) {
                 // memset(write_to_server, '\0', max_length);
                 client_read();
+            }
+            else {
+                if(client_socket_.is_open())
+                    client_socket_.close(); 
+                if(server_socket_.is_open())
+                    server_socket_.close();
             }
         });
     }
@@ -273,6 +260,7 @@ private:
             [this, self](boost::system::error_code ec, boost::asio::ip::tcp::socket socket) {
             if (!ec) {
                 server_socket_ = std::move(socket);
+                print_info();
                 int listen_port = acceptor_.local_endpoint().port();
                 unsigned char* reply = reply_generator(true, listen_port);
                 auto self(shared_from_this());
@@ -280,8 +268,8 @@ private:
                     [this, self, reply](boost::system::error_code ec, std::size_t /*length*/) {
                     if (!ec) {
                         free(reply);
-                        client_read();
                         server_read();
+                        client_read();
                     }
                     else {
                         if(client_socket_.is_open())
@@ -304,6 +292,7 @@ private:
                               [this, self](boost::system::error_code ec) {
             if (!ec) {
                 // cout << "connected" << endl;
+                print_info();
                 unsigned char* reply;
                 reply = reply_generator(true, 0);
 
@@ -312,8 +301,8 @@ private:
                                         [this, self1, reply](boost::system::error_code ec, std::size_t /*length*/) {
                     if (!ec) {
                         free(reply);
-                        client_read();
                         server_read();
+                        client_read();
                     }
                     else {
                         if(client_socket_.is_open())
@@ -333,12 +322,12 @@ private:
 
     void connect_v4a() {
         // cout << "connecting..." << endl;
-        boost::asio::ip::tcp::resolver::query query_(domain_name, to_string(dst_port));
-        do_resolve(query_);
+        // do_resolve();
         auto self(shared_from_this());
-        server_socket_.async_connect(*(endpoint_.begin()),
+        server_socket_.async_connect(*(endpoint_.begin()), 
                               [this, self](boost::system::error_code ec) {
             if (!ec) {
+                print_info();
                 // cout << "connected" << endl;
                 unsigned char* reply;
                 reply = reply_generator(true, 0);
@@ -348,8 +337,8 @@ private:
                                         [this, self1, reply](boost::system::error_code ec, std::size_t /*length*/) {
                     if (!ec) {
                         free(reply);
-                        client_read();
                         server_read();
+                        client_read();
                     }
                     else {
                         if(client_socket_.is_open())

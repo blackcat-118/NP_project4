@@ -72,13 +72,13 @@ private:
             [this, self, reply](boost::system::error_code ec, std::size_t /*length*/) {
             free(reply);
         });
-        client_socket_.close();
     }
     void print_info() {
         cout << "<S_IP>: " << client_socket_.remote_endpoint().address().to_string() << endl;
         cout << "<S_PORT>: " << to_string(client_socket_.remote_endpoint().port()) << endl;
-        cout << "<D_IP>: " << server_socket_.remote_endpoint().address().to_string() << endl;
+        cout << "<D_IP>: " << dst_ip << endl;
         cout << "<D_PORT>: " << dst_port << endl;
+
         if (cd == 1) {
             cout << "<Command>: CONNECT" << endl;
         }
@@ -103,26 +103,24 @@ private:
     void process_request() {
         // cout << vn << " " << cd << " " << dst_port << " " << dst_ip << " id: " << userid << " dom: " << domain_name << endl;
         if (vn == 5) {
-            do_reject();
             print_info();
+            do_reject();
             return;
         }
-        // do firewall 
-        accept = firewall();
-        if (accept) {
-            if (cd == 1) {
-                if (domain_name == "") {
-                    connect_v4();
-                }
-                else {
-                    do_resolve();
-                }
+
+        if (cd == 1) {
+            if (domain_name == "") {
+                connect_v4();
             }
-            else if (cd == 2) {
-                bind();
+            else {
+                do_resolve();
             }
         }
+        else if (cd == 2) {
+            bind();
+        }
         else {
+            print_info();
             do_reject();
             return;
         }
@@ -147,10 +145,7 @@ private:
                 server_write(length);
             }
             else {
-                if(client_socket_.is_open())
-                    client_socket_.close(); 
-                if(server_socket_.is_open())
-                    server_socket_.close();
+                client_socket_.close(); 
                 // server_read();
             }
         });
@@ -167,7 +162,7 @@ private:
                 client_write(length);
             }
             else {
-                
+                server_socket_.close();
                 // client_read();
             }
         });
@@ -181,12 +176,6 @@ private:
                 // memset(write_to_client, '\0', max_length);
                 server_read();
             }
-            else {
-                if(client_socket_.is_open())
-                    client_socket_.close(); 
-                if(server_socket_.is_open())
-                    server_socket_.close();
-            }
         });
     }
 
@@ -198,12 +187,6 @@ private:
                 // memset(write_to_server, '\0', max_length);
                 client_read();
             }
-            else {
-                if(client_socket_.is_open())
-                    client_socket_.close(); 
-                if(server_socket_.is_open())
-                    server_socket_.close();
-            }
         });
     }
     bool firewall() {
@@ -214,9 +197,9 @@ private:
 
         memset(rule, '\0', 64);
         while (fin.getline(rule, 64)) {
+            strcpy(d_ip, dst_ip.data());
             // cout << rule << endl;
             char* token = strtok(rule, " ");
-            char* parsed_ip;
             if (token == NULL) {
                 continue;
             }
@@ -234,24 +217,41 @@ private:
             
             token = strtok(NULL, " ");
             // cout << token << endl;
+            size_t indx1_1 = 0;
+            size_t indx1_2 = 0;
+            size_t indx2_1 = 0;
+            size_t indx2_2 = 0;
+            string ip1 = token;
+            string ip2 = d_ip;
             for (int i = 0; i < 4; i++) {
-                token = strtok(token, ".");
-                token = strtok(NULL, ".");
-                if (i == 0) {
-                    parsed_ip = strtok(d_ip, ".");
-                }
-                else {
-                    parsed_ip = strtok(NULL, ".");
-                }
-                if (strcmp(token, "*") == 0) {
+                
+                indx1_2 = ip1.find_first_of(".", indx1_1+1);
+                indx2_2 = ip2.find_first_of(".", indx2_1+1);
+                string i1 = ip1.substr(indx1_1, indx1_2-indx1_1);
+                string i2 = ip2.substr(indx2_1, indx2_2-indx2_1);
+                indx1_1 = indx1_2+1;
+                indx2_1 = indx2_2+1;
+                // if (i == 0) {
+                //     token = strtok(token, ".");
+                //     parsed_ip = strtok(d_ip, ".");
+                // }
+                // else {
+                //     token = strtok(NULL, ".");
+                //     parsed_ip = strtok(NULL, ".");
+                // }
+                // cout << i1 << endl;
+                // cout << i2 << endl;
+                if (i1 == "*") {
+                    fin.close();
                     return true;
                 }
-                else if (strcmp(token, parsed_ip) != 0) {
+                else if (i1 != i2) {
                     break;
                 }
             }
             memset(rule, '\0', 64);
         }
+        fin.close();
         return false;
     }
     void do_accept() {
@@ -260,7 +260,6 @@ private:
             [this, self](boost::system::error_code ec, boost::asio::ip::tcp::socket socket) {
             if (!ec) {
                 server_socket_ = std::move(socket);
-                print_info();
                 int listen_port = acceptor_.local_endpoint().port();
                 unsigned char* reply = reply_generator(true, listen_port);
                 auto self(shared_from_this());
@@ -272,10 +271,8 @@ private:
                         client_read();
                     }
                     else {
-                        if(client_socket_.is_open())
-                            client_socket_.close(); 
-                        if(server_socket_.is_open())
-                            server_socket_.close();
+                        client_socket_.close(); 
+                        server_socket_.close();
                     }
                 });
                 do_accept();
@@ -284,6 +281,7 @@ private:
     }
 
     void connect_v4() {
+        // do firewall 
         // cout << "connecting..." << endl;
         boost::asio::ip::tcp::endpoint endpoint(boost::asio::ip::address::from_string(dst_ip), dst_port);
         // cout << endpoint.address() << endl;
@@ -292,7 +290,13 @@ private:
                               [this, self](boost::system::error_code ec) {
             if (!ec) {
                 // cout << "connected" << endl;
+                accept = firewall();
                 print_info();
+                if (accept == false) {
+                    do_reject();
+                    return;
+                }
+                
                 unsigned char* reply;
                 reply = reply_generator(true, 0);
 
@@ -305,10 +309,8 @@ private:
                         client_read();
                     }
                     else {
-                        if(client_socket_.is_open())
-                            client_socket_.close(); 
-                        if(server_socket_.is_open())
-                            server_socket_.close();
+                        client_socket_.close(); 
+                        server_socket_.close();
                     }
                 });
                 
@@ -323,11 +325,19 @@ private:
     void connect_v4a() {
         // cout << "connecting..." << endl;
         // do_resolve();
+        // 
         auto self(shared_from_this());
         server_socket_.async_connect(*(endpoint_.begin()), 
                               [this, self](boost::system::error_code ec) {
             if (!ec) {
+                dst_ip = server_socket_.remote_endpoint().address().to_string();
+                accept = firewall();
                 print_info();
+                if (accept == false) {
+                    do_reject();
+                    return;
+                }
+
                 // cout << "connected" << endl;
                 unsigned char* reply;
                 reply = reply_generator(true, 0);
@@ -341,15 +351,14 @@ private:
                         client_read();
                     }
                     else {
-                        if(client_socket_.is_open())
-                            client_socket_.close(); 
-                        if(server_socket_.is_open())
-                            server_socket_.close();
+                        client_socket_.close(); 
+                        server_socket_.close();
                     }
                 });
                 
             }
             else {
+                print_info();
                 do_reject();
                 return;
             }
@@ -372,13 +381,17 @@ private:
                                 [this, self, reply](boost::system::error_code ec, std::size_t /*length*/) {
             if (!ec) {
                 free(reply);
+                accept = firewall();
+                print_info();
+                if (accept == false) {
+                    do_reject();
+                    return;
+                }
                 do_accept();
             }
             else {
-                if(client_socket_.is_open())
-                    client_socket_.close(); 
-                if(server_socket_.is_open())
-                    server_socket_.close();
+                client_socket_.close(); 
+                server_socket_.close();
             }
         });
     }

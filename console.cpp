@@ -69,22 +69,7 @@ public:
 
     void start() {
         do_connect_socks();
-        // auto self(shared_from_this());
-        // boost::asio::ip::tcp::resolver::query query_(host, port);
-        // resolver_.async_resolve(query_, 
-        // [this, self](boost::system::error_code ec, boost::asio::ip::tcp::resolver::results_type result) {
-        //     endpoint_ = result;
-        //     if (!ec) {
-        //         do_connect();
-        //         //cout << "<script>document.getElementById(\"s" << sid << "\").innerHTML += \'<b>" << "success." << "</b>\';</script>" << endl;
-                
-        //     }
-        //     else {
-        //         socket_.close();
-        //         //cout << "<script>document.getElementById(\"s" << sid << "\").innerHTML += \'<b>" << "failed." << "</b>\';</script>" << endl;
-        //     }
-        // });
-        
+
     }
     
 private:
@@ -97,10 +82,8 @@ private:
             if (!ec) {
                 do_connect();
                 //cout << "<script>document.getElementById(\"s" << sid << "\").innerHTML += \'<b>" << "success." << "</b>\';</script>" << endl;
-                
             }
             else {
-                socket_.close();
                 //cout << "<script>document.getElementById(\"s" << sid << "\").innerHTML += \'<b>" << "failed." << "</b>\';</script>" << endl;
             }
         });        
@@ -140,9 +123,6 @@ private:
                 });
 
                 //cout << "<script>document.getElementById(\"s" << sid << "\").innerHTML += \'<b>" << do_replace("connected\n") << "</b>\';</script>" << endl;
-            }
-            else {
-                socket_.close();
             }
         });
     }
@@ -193,8 +173,13 @@ private:
             cmd[strlen(cmd)] = '\n';
             cout << "<script>document.getElementById(\"s" << sid << "\").innerHTML += \'" << do_replace(cmd, 0) << "\';</script>" << endl;
             boost::asio::async_write(socket_, boost::asio::buffer(cmd, strlen(cmd)), 
-            [this, self](boost::system::error_code ec, std::size_t length) {
+            [this, self, cmd](boost::system::error_code ec, std::size_t length) {
                 if (!ec) {
+                    if (strstr(cmd, "exit") != NULL) {
+                        fin.close();
+                        socket_.close();
+                        return;
+                    }
                     do_read();
                 }
             });

@@ -9,6 +9,8 @@
 
 using namespace std;
 
+string sh, sp;
+
 void print() {
     cout << "<script>document.getElementById(\"s0\").innerHTML += \'<b>" << "hello" << "</b>\';</script>" << endl;
 
@@ -66,8 +68,29 @@ public:
     client(int sid, string host, string port, string file, boost::asio::io_context& io_context): sid(sid), host(host), port(port), file(file), resolver_(io_context), socket_(io_context){}
 
     void start() {
+        do_connect_socks();
+        // auto self(shared_from_this());
+        // boost::asio::ip::tcp::resolver::query query_(host, port);
+        // resolver_.async_resolve(query_, 
+        // [this, self](boost::system::error_code ec, boost::asio::ip::tcp::resolver::results_type result) {
+        //     endpoint_ = result;
+        //     if (!ec) {
+        //         do_connect();
+        //         //cout << "<script>document.getElementById(\"s" << sid << "\").innerHTML += \'<b>" << "success." << "</b>\';</script>" << endl;
+                
+        //     }
+        //     else {
+        //         socket_.close();
+        //         //cout << "<script>document.getElementById(\"s" << sid << "\").innerHTML += \'<b>" << "failed." << "</b>\';</script>" << endl;
+        //     }
+        // });
+        
+    }
+    
+private:
+    void do_connect_socks() {
         auto self(shared_from_this());
-        boost::asio::ip::tcp::resolver::query query_(host, port);
+        boost::asio::ip::tcp::resolver::query query_(sh, sp);
         resolver_.async_resolve(query_, 
         [this, self](boost::system::error_code ec, boost::asio::ip::tcp::resolver::results_type result) {
             endpoint_ = result;
@@ -80,27 +103,68 @@ public:
                 socket_.close();
                 //cout << "<script>document.getElementById(\"s" << sid << "\").innerHTML += \'<b>" << "failed." << "</b>\';</script>" << endl;
             }
-        });
-        
+        });        
     }
-    
-private:
     void do_connect() {
         auto self(shared_from_this());
         socket_.async_connect(*(endpoint_.begin()), 
         [this, self](boost::system::error_code ec) {
             if (!ec) {
-                //cout << "<script>document.getElementById(\"s" << sid << "\").innerHTML += \'<b>" << do_replace("connected\n") << "</b>\';</script>" << endl;
-                if (file != "") {
-                    file = "test_case/" + file;
-                    fin = ifstream(file.data());
+                unsigned char socks_req[256];
+                int len = 0;
+                socks_req[0] = 4;
+                socks_req[1] = 1;
+                // port
+                socks_req[2] = stoi(port)/256;
+                socks_req[3] = stoi(port)%256;
+                // ip
+                socks_req[4] = 0;
+                socks_req[5] = 0;
+                socks_req[6] = 0;
+                socks_req[7] = 1;
+                // name
+                socks_req[8] = 0;
+                len = 9;
+                // domain name
+                for (int i = 0; i < (int)host.size(); i++) {
+                    socks_req[len] = host[i];
+                    len++;
                 }
-                memset(data_, '\0', 20480);
-                do_read();
+                socks_req[len] = 0;
+                len++;
+                boost::asio::async_write(socket_, boost::asio::buffer(socks_req, len), 
+                [this, self](boost::system::error_code ec, std::size_t length) {
+                    if (!ec) {
+                        receive_reply();
+                    }
+                });
+
+                //cout << "<script>document.getElementById(\"s" << sid << "\").innerHTML += \'<b>" << do_replace("connected\n") << "</b>\';</script>" << endl;
             }
             else {
-                fin.close();
                 socket_.close();
+            }
+        });
+    }
+
+    void receive_reply() {
+        memset(data_, '\0', 20480);
+        auto self(shared_from_this());
+        socket_.async_read_some(boost::asio::buffer(data_, 8), 
+        [this, self](boost::system::error_code ec, std::size_t length) {
+            if (!ec) {
+                if (data_[0] == 0 && data_[1] == 90) {
+                    if (file != "") {
+                        file = "test_case/" + file;
+                        fin = ifstream(file.data());
+                    }
+                    memset(data_, '\0', 20480);
+                    do_read();
+                }
+                else {
+                    socket_.close();
+                    return;
+                }
             }
         });
     }
@@ -178,6 +242,12 @@ int main() {
             session_list[i].file = requests.substr(indx1+1, indx2-indx1-1);
         }
     }
+    indx1 = requests.find_first_of("=", indx1+1);
+    indx2 = requests.find_first_of("&", indx2+1);
+    sh = requests.substr(indx1+1, indx2-indx1-1);    
+    indx1 = requests.find_first_of("=", indx1+1);
+    indx2 = requests.find_first_of("&", indx2+1);
+    sp = requests.substr(indx1+1, indx2-indx1-1);
 
     //h0=nplinux7.cs.nycu.edu.tw&p0=12345&f0=t1.txt&h1=nplinux3.cs.nycu.edu.tw&p1=12344&f1=t2.txt&h2=&p2=&f2=&h3=&p3=&f3=&h4=&p4=&f4=
     cout << "Content-type: text/html\r\n\r\n" << flush;
